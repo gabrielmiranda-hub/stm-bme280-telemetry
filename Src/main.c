@@ -42,6 +42,40 @@ typedef struct {
     double pressao;
     double altitude;
 } BMEstruct;
+typedef struct {
+    uint8_t id;
+    double gyrq0;
+    double gyrq1;
+    double gyrq2;
+    double gyrreal;
+
+    double accelx;
+    double accely;
+    double accelz;
+
+    double magx;
+    double magy;
+    double magz;
+
+} BNOstruct;
+
+typedef enum {
+    MSG_BME,
+    MSG_BNO,
+    MSG_ADXL
+} MsgType;
+
+typedef struct {
+    MsgType type;
+
+    union {
+        BMEstruct bme;
+        BNOstruct bno;
+    } data;
+
+} SensorMessage;
+
+
 Sensores_Data_t sensor_data;
 BME_Data_t bme_data;
 BNO085_Data_t bno_data;
@@ -51,9 +85,9 @@ BME280_Data_t bme280;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TASK1_OK  (1U << 0)
-#define TASK2_OK  (1U << 1)
-#define TASK3_OK  (1U << 2)
+#define BME_READY  (1U << 0)
+#define BNO_READY  (1U << 1)
+#define GPS	_READY (1U << 2)
 
 /* USER CODE END PD */
 
@@ -101,6 +135,7 @@ const osMessageQueueAttr_t myQueue01_attributes = {
   .name = "myQueue01"
 };
 /* USER CODE BEGIN PV */
+osEventFlagsId_t sensorEventHandle;
 osEventFlagsId_t taskReadyFlags;
 /* USER CODE END PV */
 
@@ -186,7 +221,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   Sensores_Data_Init(&sensor_data, &bme_data, &bno_data, &gps_data);
   Sensor_Init();
-
+  sensorEventHandle = osEventFlagsNew(NULL);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -206,7 +241,7 @@ int main(void)
 
   /* Create the queue(s) */
   /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (10, sizeof(BMEstruct), &myQueue01_attributes);
+  myQueue01Handle = osMessageQueueNew (10, sizeof(SensorMessage), &myQueue01_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -486,19 +521,19 @@ void Task_Blink(void *arg){
 void StartBME(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	BMEstruct msg;
+	SensorMessage msg;
 	/* Infinite loop */
     for(;;)
 	{
     	BME280Calculation(&bme280);
-		msg.id = 0x01;
-		msg.temperatura = bme280.Temperature;
-		msg.pressao = bme280.Pressure;
-		msg.altitude = bme280.AltitudeTP;
-		msg.umidade = bme280.Humidity;
+		msg.type = MSG_BME;
+		msg.data.bme.temperatura = bme280.Temperature;
+		msg.data.bme.pressao = bme280.Pressure;
+		msg.data.bme.altitude = bme280.AltitudeTP;
+		msg.data.bme.umidade= bme280.Humidity;
 		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
 		osDelay(200);
-
+		osEventFlagsSet(sensorEventHandle, BME_READY);
 	}
 }
   /* USER CODE END 5 */
@@ -514,9 +549,26 @@ void StartBNO08x(void *argument)
 {
   /* USER CODE BEGIN StartBNO08x */
   /* Infinite loop */
-  for(;;)
+	SensorMessage msg;
+	for(;;)
   {
-    osDelay(1);
+
+	msg.type = MSG_BNO;
+	msg.data.bno.gyrq0 = BNO080_getQuatI();
+	msg.data.bno.gyrq1 = BNO080_getQuatJ();
+	msg.data.bno.gyrq2 = BNO080_getQuatK();
+	msg.data.bno.gyrreal = BNO080_getQuatReal();
+
+	msg.data.bno.accelx = BNO080_getAccelX();
+	msg.data.bno.accely = BNO080_getAccelY();
+	msg.data.bno.accelz = BNO080_getAccelZ();
+
+	msg.data.bno.magx = BNO080_getMagX();
+	msg.data.bno.magy = BNO080_getMagY();
+	msg.data.bno.magz = BNO080_getMagZ();
+	osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
+	osEventFlagsSet(sensorEventHandle, BNO_READY);
+    osDelay(200);
   }
   /* USER CODE END StartBNO08x */
 }
@@ -548,16 +600,26 @@ void StartGPS(void *argument)
 /* USER CODE END Header_StartDadosTask */
 void StartDadosTask(void *argument)
 {
-    BMEstruct msg;
-
+	SensorMessage msg;
     for (;;)
     {
-        if (osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever) == osOK)
+        if ((osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever) == osOK))
         {
-            printf("Temperatura: %.2f\r\n", msg.temperatura);
-            printf("Pressao: %.2f\r\n", msg.pressao);
-            printf("Altitude: %.2f\r\n", msg.altitude);
-            printf("Umidade: %.2f\r\n", msg.umidade);
+        	osEventFlagsWait(sensorEventHandle,
+        	                 BME_READY | BNO_READY,
+        	                 osFlagsWaitAll,
+        	                 10000);
+        	if(msg.type == MSG_BME){
+        		 printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
+				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
+				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
+				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
+        	}
+        	else if(msg.type == MSG_BNO){
+        		printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
+        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0, msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
+        		printf("MAG: %.2f %.2f %.2f\r\n", msg.data.bno.magx, msg.data.bno.magy, msg.data.bno.magz);
+        	}
         }
     }
 }
