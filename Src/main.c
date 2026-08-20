@@ -35,16 +35,25 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+    uint8_t id;
+    double temperatura;
+    double umidade;
+    double pressao;
+    double altitude;
+} BMEstruct;
 Sensores_Data_t sensor_data;
 BME_Data_t bme_data;
 BNO085_Data_t bno_data;
 GPS_Data_t gps_data;
-
 BME280_Data_t bme280;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define TASK1_OK  (1U << 0)
+#define TASK2_OK  (1U << 1)
+#define TASK3_OK  (1U << 2)
 
 /* USER CODE END PD */
 
@@ -58,15 +67,41 @@ I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef huart2;
 
-/* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
+/* Definitions for BME280 */
+osThreadId_t BME280Handle;
+const osThreadAttr_t BME280_attributes = {
+  .name = "BME280",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for BNO08X */
+osThreadId_t BNO08XHandle;
+const osThreadAttr_t BNO08X_attributes = {
+  .name = "BNO08X",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for GPS */
+osThreadId_t GPSHandle;
+const osThreadAttr_t GPS_attributes = {
+  .name = "GPS",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Enviadados */
+osThreadId_t EnviadadosHandle;
+const osThreadAttr_t Enviadados_attributes = {
+  .name = "EnviaDados",
+  .stack_size = 2028 * 4,
+  .priority = (osPriority_t) osPriorityNormal1,
+};
+/* Definitions for myQueue01 */
+osMessageQueueId_t myQueue01Handle;
+const osMessageQueueAttr_t myQueue01_attributes = {
+  .name = "myQueue01"
+};
 /* USER CODE BEGIN PV */
-
+osEventFlagsId_t taskReadyFlags;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,15 +110,24 @@ static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_USART2_UART_Init(void);
-void StartDefaultTask(void *argument);
+void StartBME(void *argument);
+void StartBNO08x(void *argument);
+void StartGPS(void *argument);
+void StartDadosTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 void Task_Blink(void *arg);
 void Task_BME(void *arg);
+void Task4(void *arg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+int _write(int file, char *ptr, int len)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+    return len;
+}
 void Sensor_Init(void)
 {
 
@@ -160,17 +204,32 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of myQueue01 */
+  myQueue01Handle = osMessageQueueNew (10, sizeof(BMEstruct), &myQueue01_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  /* creation of BME280 */
+  BME280Handle = osThreadNew(StartBME, (void*) &bme280, &BME280_attributes);
+
+  /* creation of BNO08X */
+  BNO08XHandle = osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
+
+  /* creation of GPS */
+  GPSHandle = osThreadNew(StartGPS, NULL, &GPS_attributes);
+
+  /* creation of Enviadados */
+  EnviadadosHandle = osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   osThreadNew(Task_Blink, NULL, NULL);
-  osThreadNew(Task_BME, &bme280, NULL);
+  osThreadNew(StartBME, &bme280, &BME280_attributes);
+  osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
+  taskReadyFlags = osEventFlagsNew(NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -312,7 +371,7 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 10;
@@ -365,9 +424,9 @@ static void MX_USART2_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
   LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE BEGIN MX_GPIO_Init_1 */
 
-  /* USER CODE END MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOC);
@@ -379,10 +438,7 @@ static void MX_GPIO_Init(void)
   LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_13);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12|LL_GPIO_PIN_13);
-
-  /**/
-  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_12);
+  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1);
 
   /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_13;
@@ -393,33 +449,22 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_7|LL_GPIO_PIN_15;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12|LL_GPIO_PIN_13;
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_12;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+/* USER CODE BEGIN MX_GPIO_Init_2 */
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
+
+
 void Task_Blink(void *arg){
 	(void)arg;
 
@@ -429,55 +474,92 @@ void Task_Blink(void *arg){
 	}
 }
 
-void Task_BME(void *arg){
-	//(void)arg;
-	BME280_Data_t *sensor = (BME280_Data_t *)arg;
-	LapespDTO payload;
-	LapespPacket pacote;
-	memset(&payload, 0, sizeof(LapespDTO));
-
-	BME280Calculation(sensor);
-
-	while(1){
-
-
-		payload.BME_temperatura = sensor->Temperature;
-        pacote = encode_packet(
-            TYPE_LAPESP_DTO,
-            (const uint8_t *)&payload,
-            sizeof(LapespDTO)
-        );
-
-        HAL_UART_Transmit(
-            &huart2,
-            pacote.out_buffer,
-            pacote.out_len,
-            HAL_MAX_DELAY
-        );
-        osDelay(1000);
-
-	}
-}
-
-
 /* USER CODE END 4 */
 
-/* USER CODE BEGIN Header_StartDefaultTask */
+/* USER CODE BEGIN Header_StartBME */
 /**
-  * @brief  Function implementing the defaultTask thread.
+  * @brief  Function implementing the BME280 thread.
   * @param  argument: Not used
   * @retval None
   */
-/* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument)
+/* USER CODE END Header_StartBME */
+void StartBME(void *argument)
 {
   /* USER CODE BEGIN 5 */
+	BMEstruct msg;
+	/* Infinite loop */
+    for(;;)
+	{
+    	BME280Calculation(&bme280);
+		msg.id = 0x01;
+		msg.temperatura = bme280.Temperature;
+		msg.pressao = bme280.Pressure;
+		msg.altitude = bme280.AltitudeTP;
+		msg.umidade = bme280.Humidity;
+		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
+		osDelay(200);
+
+	}
+}
+  /* USER CODE END 5 */
+
+/* USER CODE BEGIN Header_StartBNO08x */
+/**
+* @brief Function implementing the BNO08X thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartBNO08x */
+void StartBNO08x(void *argument)
+{
+  /* USER CODE BEGIN StartBNO08x */
   /* Infinite loop */
   for(;;)
   {
     osDelay(1);
   }
-  /* USER CODE END 5 */
+  /* USER CODE END StartBNO08x */
+}
+
+/* USER CODE BEGIN Header_StartGPS */
+/**
+* @brief Function implementing the GPS thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartGPS */
+void StartGPS(void *argument)
+{
+  /* USER CODE BEGIN StartGPS */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartGPS */
+}
+
+/* USER CODE BEGIN Header_StartDadosTask */
+/**
+* @brief Function implementing the Enviadados thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartDadosTask */
+void StartDadosTask(void *argument)
+{
+    BMEstruct msg;
+
+    for (;;)
+    {
+        if (osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever) == osOK)
+        {
+            printf("Temperatura: %.2f\r\n", msg.temperatura);
+            printf("Pressao: %.2f\r\n", msg.pressao);
+            printf("Altitude: %.2f\r\n", msg.altitude);
+            printf("Umidade: %.2f\r\n", msg.umidade);
+        }
+    }
 }
 
 /**
@@ -493,8 +575,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM1)
-  {
+  if (htim->Instance == TIM1) {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -516,7 +597,8 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
