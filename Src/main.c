@@ -28,7 +28,7 @@
 #include "sensor-data.h"
 #include <string.h>
 #include <stdio.h>
-
+#include "BNO080.h"
 #include "BME280_STM32.h"
 
 /* USER CODE END Includes */
@@ -44,18 +44,22 @@ typedef struct {
 } BMEstruct;
 typedef struct {
     uint8_t id;
-    double gyrq0;
-    double gyrq1;
-    double gyrq2;
-    double gyrreal;
+    float gyrq0;
+    float gyrq1;
+    float gyrq2;
+    float gyrreal;
 
-    double accelx;
-    double accely;
-    double accelz;
+    float gyrx;
+	float gyry;
+	float gyrz;
 
-    double magx;
-    double magy;
-    double magz;
+    float accelx;
+    float accely;
+    float accelz;
+
+    float magx;
+    float magy;
+    float magz;
 
 } BNOstruct;
 
@@ -105,14 +109,14 @@ UART_HandleTypeDef huart2;
 osThreadId_t BME280Handle;
 const osThreadAttr_t BME280_attributes = {
   .name = "BME280",
-  .stack_size = 1024 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for BNO08X */
 osThreadId_t BNO08XHandle;
 const osThreadAttr_t BNO08X_attributes = {
   .name = "BNO08X",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for GPS */
@@ -125,8 +129,8 @@ const osThreadAttr_t GPS_attributes = {
 /* Definitions for Enviadados */
 osThreadId_t EnviadadosHandle;
 const osThreadAttr_t Enviadados_attributes = {
-  .name = "EnviaDados",
-  .stack_size = 2028 * 4,
+  .name = "Enviadados",
+  .stack_size = 4096,
   .priority = (osPriority_t) osPriorityNormal1,
 };
 /* Definitions for myQueue01 */
@@ -135,8 +139,6 @@ const osMessageQueueAttr_t myQueue01_attributes = {
   .name = "myQueue01"
 };
 /* USER CODE BEGIN PV */
-osEventFlagsId_t sensorEventHandle;
-osEventFlagsId_t taskReadyFlags;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -165,24 +167,17 @@ int _write(int file, char *ptr, int len)
 }
 void Sensor_Init(void)
 {
-
   //Init structure definition section
-	BME280_Init_t BME280_InitStruct = {0};
-
-	//Reset section
-	Reset_BME280();
-
-	/*============================ *BME280 Initialization* ============================*/
-
-	BME280_InitStruct.Filter = FILTER_8;     				//FILTER_X
-	BME280_InitStruct.Mode = BME280_NORMAL_MODE;		 	//SLEEP, NORMAL or FORCE can be written
-	BME280_InitStruct.OverSampling_H = OVERSAMPLING_16;		//OVERSAMPLING_X
-	BME280_InitStruct.OverSampling_P = OVERSAMPLING_16;		//OVERSAMPLING_X
-	BME280_InitStruct.OverSampling_T = OVERSAMPLING_16;		//OVERSAMPLING_X
-	BME280_InitStruct.SPI_EnOrDıs = SPI3_W_DISABLE;			//SPI3_W_DISABLE or SPI3_W_ENABLE can be written
-	BME280_InitStruct.T_StandBy = T_SB_250;					//T_SB_X
-
-	BME280Init(BME280_InitStruct);
+		BME280_Init_t BME280_InitStruct = {0};
+	    Reset_BME280();
+	    BME280_InitStruct.Filter = FILTER_8;
+	    BME280_InitStruct.Mode = BME280_NORMAL_MODE;
+	    BME280_InitStruct.OverSampling_H = OVERSAMPLING_16;
+	    BME280_InitStruct.OverSampling_P = OVERSAMPLING_16;
+	    BME280_InitStruct.OverSampling_T = OVERSAMPLING_16;
+	    BME280_InitStruct.SPI_EnOrDıs = SPI3_W_DISABLE;
+	    BME280_InitStruct.T_StandBy = T_SB_250;
+	    BME280Init(BME280_InitStruct);
 }
 /* USER CODE END 0 */
 
@@ -219,16 +214,21 @@ int main(void)
   MX_SPI2_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  Sensores_Data_Init(&sensor_data, &bme_data, &bno_data, &gps_data);
-  Sensor_Init();
-  sensorEventHandle = osEventFlagsNew(NULL);
   /* USER CODE END 2 */
-
   /* Init scheduler */
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
+  	 Sensores_Data_Init(&sensor_data, &bme_data, &bno_data, &gps_data);
+  	 Sensor_Init();
+  	 BNO080_Initialization();
+  	 BNO080_enableGyro(2500);
+  	 BNO080_enableRotationVector(2500); //enable rotation vector at 400Hz
+     BNO080_enableAccelerometer(2500);
+     BNO080_enableMagnetometer(2500);
+     BNO080_calibrateAll();
+     HAL_Delay(200);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -254,6 +254,7 @@ int main(void)
   /* creation of BNO08X */
   BNO08XHandle = osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
 
+
   /* creation of GPS */
   GPSHandle = osThreadNew(StartGPS, NULL, &GPS_attributes);
 
@@ -261,14 +262,15 @@ int main(void)
   EnviadadosHandle = osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  osThreadNew(Task_Blink, NULL, NULL);
-  osThreadNew(StartBME, &bme280, &BME280_attributes);
-  osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
-  taskReadyFlags = osEventFlagsNew(NULL);
+
+   osThreadNew(StartBME, &bme280, &BME280_attributes);
+   osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
+   osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
+  /* add 's, ... */
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
@@ -384,11 +386,11 @@ static void MX_SPI2_Init(void)
 
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOB);
   /**SPI2 GPIO Configuration
-  PB10   ------> SPI2_SCK
+  PB13   ------> SPI2_SCK
   PB14   ------> SPI2_MISO
   PB15   ------> SPI2_MOSI
   */
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_10|LL_GPIO_PIN_14|LL_GPIO_PIN_15;
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_13|LL_GPIO_PIN_14|LL_GPIO_PIN_15;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
@@ -473,7 +475,10 @@ static void MX_GPIO_Init(void)
   LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_13);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1);
+  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12);
+
+  /**/
+  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12);
 
   /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_13;
@@ -484,12 +489,26 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1;
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_15;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -498,16 +517,6 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-
-
-void Task_Blink(void *arg){
-	(void)arg;
-
-	while(1){
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		osDelay(500);
-	}
-}
 
 /* USER CODE END 4 */
 
@@ -526,6 +535,7 @@ void StartBME(void *argument)
     for(;;)
 	{
     	BME280Calculation(&bme280);
+    	msg.data.bme.id = 0x01;
 		msg.type = MSG_BME;
 		msg.data.bme.temperatura = bme280.Temperature;
 		msg.data.bme.pressao = bme280.Pressure;
@@ -533,10 +543,10 @@ void StartBME(void *argument)
 		msg.data.bme.umidade= bme280.Humidity;
 		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
 		osDelay(200);
-		osEventFlagsSet(sensorEventHandle, BME_READY);
 	}
 }
   /* USER CODE END 5 */
+
 
 /* USER CODE BEGIN Header_StartBNO08x */
 /**
@@ -552,24 +562,32 @@ void StartBNO08x(void *argument)
 	SensorMessage msg;
 	for(;;)
   {
+	if(BNO080_dataAvailable()){
+			msg.type = MSG_BNO;
+			msg.data.bno.id = 0x02;
 
-	msg.type = MSG_BNO;
-	msg.data.bno.gyrq0 = BNO080_getQuatI();
-	msg.data.bno.gyrq1 = BNO080_getQuatJ();
-	msg.data.bno.gyrq2 = BNO080_getQuatK();
-	msg.data.bno.gyrreal = BNO080_getQuatReal();
+			msg.data.bno.gyrq0 = BNO080_getQuatI();
+			msg.data.bno.gyrq1 = BNO080_getQuatJ();
+			msg.data.bno.gyrq2 = BNO080_getQuatK();
+			msg.data.bno.gyrreal = BNO080_getQuatReal();
 
-	msg.data.bno.accelx = BNO080_getAccelX();
-	msg.data.bno.accely = BNO080_getAccelY();
-	msg.data.bno.accelz = BNO080_getAccelZ();
+			msg.data.bno.gyrx = BNO080_getGyroX();
+			msg.data.bno.gyry = BNO080_getGyroY();
+			msg.data.bno.gyrz = BNO080_getGyroZ();
 
-	msg.data.bno.magx = BNO080_getMagX();
-	msg.data.bno.magy = BNO080_getMagY();
-	msg.data.bno.magz = BNO080_getMagZ();
-	osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
-	osEventFlagsSet(sensorEventHandle, BNO_READY);
-    osDelay(200);
+			msg.data.bno.accelx = BNO080_getAccelX();
+			msg.data.bno.accely = BNO080_getAccelY();
+			msg.data.bno.accelz = BNO080_getAccelZ();
+
+			msg.data.bno.magx = BNO080_getMagX();
+			msg.data.bno.magy = BNO080_getMagY();
+			msg.data.bno.magz = BNO080_getMagZ();
+		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
+    	osDelay(200);
+
+		}
   }
+
   /* USER CODE END StartBNO08x */
 }
 
@@ -592,37 +610,37 @@ void StartGPS(void *argument)
 }
 
 /* USER CODE BEGIN Header_StartDadosTask */
-/**
-* @brief Function implementing the Enviadados thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_StartDadosTask */
 void StartDadosTask(void *argument)
 {
 	SensorMessage msg;
     for (;;)
     {
-        if ((osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever) == osOK))
+        if ((osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever)== osOK))
         {
-        	osEventFlagsWait(sensorEventHandle,
-        	                 BME_READY | BNO_READY,
-        	                 osFlagsWaitAll,
-        	                 10000);
         	if(msg.type == MSG_BME){
-        		 printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
+        		printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
 				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
 				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
 				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
         	}
+
         	else if(msg.type == MSG_BNO){
         		printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
         		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0, msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
         		printf("MAG: %.2f %.2f %.2f\r\n", msg.data.bno.magx, msg.data.bno.magy, msg.data.bno.magz);
+        		printf("MAG: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx, msg.data.bno.gyry, msg.data.bno.gyrz);
         	}
+
         }
     }
 }
+/**
+* @brief Function implementing the Enviadados thread.
+* @param argument: Not used
+* @retval None
+*
+*/
+/* USER CODE END Header_StartDadosTask */
 
 /**
   * @brief  Period elapsed callback in non blocking mode
