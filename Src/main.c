@@ -116,7 +116,7 @@ const osThreadAttr_t BME280_attributes = {
 osThreadId_t BNO08XHandle;
 const osThreadAttr_t BNO08X_attributes = {
   .name = "BNO08X",
-  .stack_size = 512 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for GPS */
@@ -223,7 +223,7 @@ int main(void)
   	 Sensores_Data_Init(&sensor_data, &bme_data, &bno_data, &gps_data);
   	 Sensor_Init();
   	 BNO080_Initialization();
-  	 BNO080_enableGyro(2500);
+  	 BNO080_enableGyro(20000);
   	 BNO080_enableRotationVector(2500); //enable rotation vector at 400Hz
      BNO080_enableAccelerometer(2500);
      BNO080_enableMagnetometer(2500);
@@ -241,7 +241,7 @@ int main(void)
 
   /* Create the queue(s) */
   /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (10, sizeof(SensorMessage), &myQueue01_attributes);
+  myQueue01Handle = osMessageQueueNew (2, sizeof(SensorMessage), &myQueue01_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -560,6 +560,7 @@ void StartBNO08x(void *argument)
   /* USER CODE BEGIN StartBNO08x */
   /* Infinite loop */
 	SensorMessage msg;
+
 	for(;;)
   {
 	if(BNO080_dataAvailable()){
@@ -578,10 +579,6 @@ void StartBNO08x(void *argument)
 			msg.data.bno.accelx = BNO080_getAccelX();
 			msg.data.bno.accely = BNO080_getAccelY();
 			msg.data.bno.accelz = BNO080_getAccelZ();
-
-			msg.data.bno.magx = BNO080_getMagX();
-			msg.data.bno.magy = BNO080_getMagY();
-			msg.data.bno.magz = BNO080_getMagZ();
 		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
     	osDelay(200);
 
@@ -613,25 +610,61 @@ void StartGPS(void *argument)
 void StartDadosTask(void *argument)
 {
 	SensorMessage msg;
+	LapespDTO lapespdata;
+	LapespPacket pacote;
+	memset(&lapespdata, 0, sizeof(LapespDTO));
     for (;;)
     {
         if ((osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever)== osOK))
         {
         	if(msg.type == MSG_BME){
-        		printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
+        		lapespdata.BME_temperatura = msg.data.bme.temperatura;
+        		lapespdata.BME_pressao = msg.data.bme.temperatura;
+        		lapespdata.BME_temperatura = msg.data.bme.temperatura;
+
+        		pacote = encode_packet(
+        				TYPE_LAPESP_DTO,
+			            (const uint8_t *)&lapespdata,
+			            sizeof(LapespDTO)
+        		);
+
+        		/*printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
 				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
 				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
-				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
+				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);*/
         	}
 
         	else if(msg.type == MSG_BNO){
-        		printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
-        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0, msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
-        		printf("MAG: %.2f %.2f %.2f\r\n", msg.data.bno.magx, msg.data.bno.magy, msg.data.bno.magz);
-        		printf("MAG: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx, msg.data.bno.gyry, msg.data.bno.gyrz);
-        	}
+        		lapespdata.BNO_accel_x = msg.data.bno.accelx;
+        		lapespdata.BNO_accel_y = msg.data.bno.accely;
+        		lapespdata.BNO_accel_z = msg.data.bno.accelz;
 
+        		lapespdata.BNO_q0 = msg.data.bno.gyrq0;
+				lapespdata.BNO_q1 = msg.data.bno.gyrq1;
+				lapespdata.BNO_q2 = msg.data.bno.gyrq2;
+				lapespdata.BNO_q3 = msg.data.bno.gyrreal;
+
+				lapespdata.BNO_gyro_x = msg.data.bno.gyrx;
+				lapespdata.BNO_gyro_y = msg.data.bno.gyry;
+				lapespdata.BNO_gyro_z = msg.data.bno.gyrz;
+
+				pacote = encode_packet(
+						TYPE_LAPESP_DTO,
+						(const uint8_t *)&lapespdata,
+						sizeof(LapespDTO)
+				);
+
+        		/*printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
+        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0, msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
+        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx, msg.data.bno.gyry, msg.data.bno.gyrz);*/
+        	}
+            HAL_UART_Transmit(
+                &huart2,
+                pacote.out_buffer,
+                pacote.out_len,
+                HAL_MAX_DELAY);
         }
+
     }
 }
 /**
