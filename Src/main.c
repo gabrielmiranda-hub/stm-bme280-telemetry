@@ -80,18 +80,12 @@ typedef struct {
 } SensorMessage;
 
 
-Sensores_Data_t sensor_data;
-BME_Data_t bme_data;
-BNO085_Data_t bno_data;
-GPS_Data_t gps_data;
+
 BME280_Data_t bme280;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BME_READY  (1U << 0)
-#define BNO_READY  (1U << 1)
-#define GPS	_READY (1U << 2)
 
 /* USER CODE END PD */
 
@@ -130,13 +124,13 @@ const osThreadAttr_t GPS_attributes = {
 osThreadId_t EnviadadosHandle;
 const osThreadAttr_t Enviadados_attributes = {
   .name = "Enviadados",
-  .stack_size = 4096,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
-/* Definitions for myQueue01 */
-osMessageQueueId_t myQueue01Handle;
-const osMessageQueueAttr_t myQueue01_attributes = {
-  .name = "myQueue01"
+/* Definitions for SensoresQueue */
+osMessageQueueId_t SensoresQueueHandle;
+const osMessageQueueAttr_t SensoresQueue_attributes = {
+  .name = "SensoresQueue"
 };
 /* USER CODE BEGIN PV */
 /* USER CODE END PV */
@@ -153,9 +147,6 @@ void StartGPS(void *argument);
 void StartDadosTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-void Task_Blink(void *arg);
-void Task_BME(void *arg);
-void Task4(void *arg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -213,22 +204,20 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI2_Init();
   MX_USART2_UART_Init();
+  printf("\r\nTESTE UART 115200\r\n");
+  printf("ABC 123\r\n");
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
+
   /* Init scheduler */
   osKernelInitialize();
+  BNO080_Initialization();
+  BNO080_enableRotationVector(40000);
+  //BNO080_enableAccelerometer(40000);
+  //BNO080_enableGyro(40000);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
-  	 Sensores_Data_Init(&sensor_data, &bme_data, &bno_data, &gps_data);
-  	 Sensor_Init();
-  	 BNO080_Initialization();
-  	 BNO080_enableGyro(20000);
-  	 BNO080_enableRotationVector(2500); //enable rotation vector at 400Hz
-     BNO080_enableAccelerometer(2500);
-     BNO080_enableMagnetometer(2500);
-     BNO080_calibrateAll();
-     HAL_Delay(200);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -240,8 +229,8 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* Create the queue(s) */
-  /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (2, sizeof(SensorMessage), &myQueue01_attributes);
+  /* creation of SensoresQueue */
+  SensoresQueueHandle = osMessageQueueNew (10, sizeof(SensorMessage), &SensoresQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -254,7 +243,6 @@ int main(void)
   /* creation of BNO08X */
   BNO08XHandle = osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
 
-
   /* creation of GPS */
   GPSHandle = osThreadNew(StartGPS, NULL, &GPS_attributes);
 
@@ -262,11 +250,19 @@ int main(void)
   EnviadadosHandle = osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  printf("ANTES CRIAR BNO\r\n");
 
    osThreadNew(StartBME, &bme280, &BME280_attributes);
    osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
    osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
-
+   if (BNO08XHandle == NULL)
+   {
+       printf("ERRO AO CRIAR BNO TASK\r\n");
+   }
+   else
+   {
+       printf("BNO TASK CRIADA\r\n");
+   }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -408,7 +404,7 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 10;
@@ -436,7 +432,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 9600;
+  huart2.Init.BaudRate = 115200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -475,10 +471,10 @@ static void MX_GPIO_Init(void)
   LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_13);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12);
+  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_0|LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12);
+  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12);
 
   /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_13;
@@ -489,26 +485,26 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_1;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_15;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -529,21 +525,32 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartBME */
 void StartBME(void *argument)
 {
-  /* USER CODE BEGIN 5 */
-	SensorMessage msg;
-	/* Infinite loop */
-    for(;;)
-	{
-    	BME280Calculation(&bme280);
-    	msg.data.bme.id = 0x01;
-		msg.type = MSG_BME;
-		msg.data.bme.temperatura = bme280.Temperature;
-		msg.data.bme.pressao = bme280.Pressure;
-		msg.data.bme.altitude = bme280.AltitudeTP;
-		msg.data.bme.umidade= bme280.Humidity;
-		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
-		osDelay(200);
-	}
+    SensorMessage msg;
+
+    Sensor_Init();
+
+    for (;;)
+    {
+        BME280Calculation(&bme280);
+
+        msg.data.bme.id = 0x01;
+        msg.type = MSG_BME;
+        msg.data.bme.temperatura = bme280.Temperature;
+        msg.data.bme.pressao = bme280.Pressure;
+        msg.data.bme.altitude = bme280.AltitudeTP;
+        msg.data.bme.umidade = bme280.Humidity;
+
+        osStatus_t status = osMessageQueuePut(
+            SensoresQueueHandle,
+            &msg,
+            0,
+            0
+        );
+
+        printf("BME queue = %d\r\n", status);
+
+        osDelay(1000);
+    }
 }
   /* USER CODE END 5 */
 
@@ -557,41 +564,53 @@ void StartBME(void *argument)
 /* USER CODE END Header_StartBNO08x */
 void StartBNO08x(void *argument)
 {
-  /* USER CODE BEGIN StartBNO08x */
-  /* Infinite loop */
-	SensorMessage msg;
+    SensorMessage msg;
 
-	for(;;)
-  {
-	if(BNO080_dataAvailable()){
-			msg.type = MSG_BNO;
-			msg.data.bno.id = 0x02;
+    BNO080_Initialization();
 
-			msg.data.bno.gyrq0 = BNO080_getQuatI();
-			msg.data.bno.gyrq1 = BNO080_getQuatJ();
-			msg.data.bno.gyrq2 = BNO080_getQuatK();
-			msg.data.bno.gyrreal = BNO080_getQuatReal();
+    BNO080_enableRotationVector(2500);
+    BNO080_enableAccelerometer(2500);
 
-			msg.data.bno.gyrx = BNO080_getGyroX();
-			msg.data.bno.gyry = BNO080_getGyroY();
-			msg.data.bno.gyrz = BNO080_getGyroZ();
+    while (1)
+    {
+        if (BNO080_dataAvailable() == 1)
+        {
+            msg.data.bno.id = 0x01;
+            msg.type = MSG_BNO;
 
-			msg.data.bno.accelx = BNO080_getAccelX();
-			msg.data.bno.accely = BNO080_getAccelY();
-			msg.data.bno.accelz = BNO080_getAccelZ();
-		osMessageQueuePut(myQueue01Handle, &msg, 0, 0);
-    	osDelay(200);
+            msg.data.bno.gyrq0 = BNO080_getQuatI();
+            msg.data.bno.gyrq1 = BNO080_getQuatJ();
+            msg.data.bno.gyrq2 = BNO080_getQuatK();
+            msg.data.bno.gyrreal = BNO080_getQuatReal();
 
-		}
-  }
+            msg.data.bno.accelx = BNO080_getAccelX();
+            msg.data.bno.accely = BNO080_getAccelY();
+            msg.data.bno.accelz = BNO080_getAccelZ();
 
-  /* USER CODE END StartBNO08x */
-}
+            printf("QUAT: %.4f %.4f %.4f %.4f\r\n",
+                   msg.data.bno.gyrq0,
+                   msg.data.bno.gyrq1,
+                   msg.data.bno.gyrq2,
+                   msg.data.bno.gyrreal);
 
-/* USER CODE BEGIN Header_StartGPS */
-/**
-* @brief Function implementing the GPS thread.
-* @param argument: Not used
+            printf("ACC: %.2f %.2f %.2f\r\n",
+                   msg.data.bno.accelx,
+                   msg.data.bno.accely,
+                   msg.data.bno.accelz);
+
+            osStatus_t status = osMessageQueuePut(
+                SensoresQueueHandle,
+                &msg,
+                0,
+                0
+            );
+
+            printf("BNO queue = %d\r\n", status);
+        }
+
+        osDelay(100);
+    }
+}/* @param argument: Not used
 * @retval None
 */
 /* USER CODE END Header_StartGPS */
@@ -610,15 +629,15 @@ void StartGPS(void *argument)
 void StartDadosTask(void *argument)
 {
 	SensorMessage msg;
-	LapespDTO lapespdata;
+	/*LapespDTO lapespdata;
 	LapespPacket pacote;
 	memset(&lapespdata, 0, sizeof(LapespDTO));
-    for (;;)
+    */for (;;)
     {
-        if ((osMessageQueueGet(myQueue01Handle, &msg, 0, osWaitForever)== osOK))
+        if ((osMessageQueueGet(SensoresQueueHandle, &msg, 0, osWaitForever)== osOK))
         {
         	if(msg.type == MSG_BME){
-        		lapespdata.BME_temperatura = msg.data.bme.temperatura;
+        		/*lapespdata.BME_temperatura = msg.data.bme.temperatura;
         		lapespdata.BME_pressao = msg.data.bme.temperatura;
         		lapespdata.BME_temperatura = msg.data.bme.temperatura;
 
@@ -626,16 +645,16 @@ void StartDadosTask(void *argument)
         				TYPE_LAPESP_DTO,
 			            (const uint8_t *)&lapespdata,
 			            sizeof(LapespDTO)
-        		);
+        		);*/
 
-        		/*printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
+        		printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
 				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
 				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
-				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);*/
+				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
         	}
 
         	else if(msg.type == MSG_BNO){
-        		lapespdata.BNO_accel_x = msg.data.bno.accelx;
+        		/*lapespdata.BNO_accel_x = msg.data.bno.accelx;
         		lapespdata.BNO_accel_y = msg.data.bno.accely;
         		lapespdata.BNO_accel_z = msg.data.bno.accelz;
 
@@ -653,18 +672,15 @@ void StartDadosTask(void *argument)
 						(const uint8_t *)&lapespdata,
 						sizeof(LapespDTO)
 				);
+*/
+        		printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
+        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx,msg.data.bno.gyry, msg.data.bno.gyrz);
+        		printf("QUAT: %.4f %.4f %.4f %.4f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
 
-        		/*printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
-        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0, msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
-        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx, msg.data.bno.gyry, msg.data.bno.gyrz);*/
+
         	}
-            HAL_UART_Transmit(
-                &huart2,
-                pacote.out_buffer,
-                pacote.out_len,
-                HAL_MAX_DELAY);
-        }
 
+        }
     }
 }
 /**
@@ -674,7 +690,6 @@ void StartDadosTask(void *argument)
 *
 */
 /* USER CODE END Header_StartDadosTask */
-
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM1 interrupt took place, inside
