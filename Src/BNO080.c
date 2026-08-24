@@ -183,50 +183,51 @@ void BNO080_GPIO_SPI_Initialization(void)
 
 }
 
-	int BNO080_Initialization(void)
+int BNO080_Initialization(void)
+{
+	BNO080_GPIO_SPI_Initialization();
+
+	printf("Checking BNO080...");
+
+	CHIP_DESELECT(BNO080);
+
+	WAKE_HIGH();
+	RESET_LOW();
+	HAL_Delay(200);
+	RESET_HIGH();
+
+	BNO080_waitForSPI();
+
+	//Dump advertisement + init response (pode vir mais de 2 pacotes, então
+	//lemos até parar de haver INT pendente logo em seguida, com folga)
+	BNO080_waitForSPI();
+	BNO080_receivePacket();
+
+	BNO080_waitForSPI();
+	BNO080_receivePacket();
+
+	//Pede o Product ID
+	// Clear buffers to avoid stale data showing as device response
+	memset(shtpData, 0, MAX_PACKET_SIZE);
+	memset(shtpHeader, 0, 4);
+
+	shtpData[0] = SHTP_REPORT_PRODUCT_ID_REQUEST;
+	shtpData[1] = 0;
+	BNO080_sendPacket(CHANNEL_CONTROL, 2);
+
+	//Now we wait for response
+	BNO080_waitForSPI();
+	if (BNO080_receivePacket() == 1)
 	{
-		BNO080_GPIO_SPI_Initialization();
-
-		printf("Checking BNO080...");
-
-		CHIP_DESELECT(BNO080);
-
-		WAKE_HIGH();
-		RESET_LOW();
-		HAL_Delay(200);
-		RESET_HIGH();
-
-		BNO080_waitForSPI();
-
-		//Dump advertisement + init response (pode vir mais de 2 pacotes, então
-		//lemos até parar de haver INT pendente logo em seguida, com folga)
-		BNO080_waitForSPI();
-		BNO080_receivePacket();
-
-		BNO080_waitForSPI();
-		BNO080_receivePacket();
-
-		//Pede o Product ID
-		// Clear buffers to avoid stale data showing as device response
-		memset(shtpData, 0, MAX_PACKET_SIZE);
-		memset(shtpHeader, 0, 4);
-
-		shtpData[0] = SHTP_REPORT_PRODUCT_ID_REQUEST;
-		shtpData[1] = 0;
-		BNO080_sendPacket(CHANNEL_CONTROL, 2);
-
-		//Now we wait for response
-		BNO080_waitForSPI();
-		if (BNO080_receivePacket() == 1)
+		if (shtpData[0] == SHTP_REPORT_PRODUCT_ID_RESPONSE)
 		{
-			if (shtpData[0] == SHTP_REPORT_PRODUCT_ID_RESPONSE)
-			{
-				return (0);
-			}// Sensor OK
-		}
-
-		printf("BNO080 Not OK: 0x%02x Should be 0x%02x\n", shtpData[0], SHTP_REPORT_PRODUCT_ID_RESPONSE);
+			printf("BNO080 who_am_i = 0x%02x...ok\n\n", shtpData[0]);
+			return (0);
+		}// Sensor OK
 	}
+
+	printf("BNO080 Not OK: 0x%02x Should be 0x%02x\n", shtpData[0], SHTP_REPORT_PRODUCT_ID_RESPONSE);
+}
 
 unsigned char SPI2_SendByte(unsigned char data)
 {
@@ -385,19 +386,6 @@ void BNO080_parseInputReport(void)
 			rawGyroX = data1;
 			rawGyroY = data2;
 			rawGyroZ = data3;
-			 printf("GYRO REPORT: %u %u %u\r\n",
-			           data1, data2, data3);
-			 printf("GYRO: status=%u ID=%u\r\n",
-			        status,
-			        shtpData[5]);
-
-			 printf("RAW: %02X %02X %02X %02X %02X %02X\r\n",
-			        shtpData[9],
-			        shtpData[10],
-			        shtpData[11],
-			        shtpData[12],
-			        shtpData[13],
-			        shtpData[14]);
 			break;
 		}
 		case SENSOR_REPORTID_MAGNETIC_FIELD:
@@ -1097,13 +1085,18 @@ int BNO080_receivePacket(void)
 
 	//printf("length: %d\n", dataLength);
 
-	//Read incoming data into the shtpData array
+	//Read incoming data into the shtpData array4
+	if (dataLength > 270) {
+	    // Força um limite seguro ou aborta a leitura retornando erro (0)
+	    dataLength = 270;
+	}
+
 	for (uint16_t dataSpot = 0; dataSpot < dataLength; dataSpot++)
 	{
 		incoming = SPI2_SendByte(0xFF);
 		//printf("%d ", incoming);
 		if (dataSpot < MAX_PACKET_SIZE)	//BNO080 can respond with upto 270 bytes, avoid overflow
-			shtpData[dataSpot] = incoming; //Store data into the shtpData array
+			shtpData[dataSpot] = incgoming; //Store data into the shtpData array
 	}
 	//printf("\n");
 
@@ -1145,3 +1138,4 @@ int BNO080_sendPacket(uint8_t channelNumber, uint8_t dataLength)
 	return (1);
 }
 ///////////////////////////////////////////////////////////////////////////
+
