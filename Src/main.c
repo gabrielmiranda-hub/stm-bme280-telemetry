@@ -79,6 +79,7 @@ typedef struct {
 
 } SensorMessage;
 
+SensorMessage msg;
 
 
 BME280_Data_t bme280;
@@ -200,12 +201,8 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_SPI2_Init();
   MX_USART2_UART_Init();
-  printf("\r\nTESTE UART 115200\r\n");
-  printf("ABC 123\r\n");
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
 
@@ -432,7 +429,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 9600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -525,12 +522,12 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartBME */
 void StartBME(void *argument)
 {
-    SensorMessage msg;
 
     Sensor_Init();
 
     for (;;)
     {
+
         BME280Calculation(&bme280);
 
         msg.data.bme.id = 0x01;
@@ -546,10 +543,11 @@ void StartBME(void *argument)
             0,
             0
         );
+        if(status!= osOK){
+        	osDelay(2000);
+        }
 
-        printf("BME queue = %d\r\n", status);
-
-        osDelay(1000);
+        osDelay(300);
     }
 }
   /* USER CODE END 5 */
@@ -564,12 +562,11 @@ void StartBME(void *argument)
 /* USER CODE END Header_StartBNO08x */
 void StartBNO08x(void *argument)
 {
-    SensorMessage msg;
-
     BNO080_Initialization();
 
-    BNO080_enableRotationVector(2500);
     BNO080_enableAccelerometer(2500);
+    BNO080_enableRotationVector(2500);
+    BNO080_enableGyro(2500);
 
     while (1)
     {
@@ -587,25 +584,19 @@ void StartBNO08x(void *argument)
             msg.data.bno.accely = BNO080_getAccelY();
             msg.data.bno.accelz = BNO080_getAccelZ();
 
-            printf("QUAT: %.4f %.4f %.4f %.4f\r\n",
-                   msg.data.bno.gyrq0,
-                   msg.data.bno.gyrq1,
-                   msg.data.bno.gyrq2,
-                   msg.data.bno.gyrreal);
-
-            printf("ACC: %.2f %.2f %.2f\r\n",
-                   msg.data.bno.accelx,
-                   msg.data.bno.accely,
-                   msg.data.bno.accelz);
-
+            msg.data.bno.gyrx= BNO080_getGyroX();
+            msg.data.bno.gyry = BNO080_getGyroY();
+            msg.data.bno.gyrz = BNO080_getGyroZ();
             osStatus_t status = osMessageQueuePut(
                 SensoresQueueHandle,
                 &msg,
                 0,
                 0
             );
+            if(status!= osOK){
+            	osDelay(2000);
+            }
 
-            printf("BNO queue = %d\r\n", status);
         }
 
         osDelay(100);
@@ -628,26 +619,28 @@ void StartGPS(void *argument)
 /* USER CODE BEGIN Header_StartDadosTask */
 void StartDadosTask(void *argument)
 {
-	SensorMessage msg;
-	/*LapespDTO lapespdata;
-	LapespPacket pacote;
-	memset(&lapespdata, 0, sizeof(LapespDTO));
-    */for (;;)
+	//LapespDTO lapespdata;
+	//LapespPacket pacote;
+	//memset(&lapespdata, 0, sizeof(LapespDTO));
+    for (;;)
     {
         if ((osMessageQueueGet(SensoresQueueHandle, &msg, 0, osWaitForever)== osOK))
         {
         	if(msg.type == MSG_BME){
         		/*lapespdata.BME_temperatura = msg.data.bme.temperatura;
-        		lapespdata.BME_pressao = msg.data.bme.temperatura;
-        		lapespdata.BME_temperatura = msg.data.bme.temperatura;
-
+        		lapespdata.BME_pressao = msg.data.bme.pressao;
+        		lapespdata.BME_humidade = msg.data.bme.umidade;
         		pacote = encode_packet(
         				TYPE_LAPESP_DTO,
 			            (const uint8_t *)&lapespdata,
 			            sizeof(LapespDTO)
-        		);*/
+        		);
+        		HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2,
+						 pacote.out_buffer,
+						 pacote.out_len,
+						 HAL_MAX_DELAY);
 
-        		printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
+        		*/printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
 				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
 				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
 				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
@@ -666,23 +659,33 @@ void StartDadosTask(void *argument)
 				lapespdata.BNO_gyro_x = msg.data.bno.gyrx;
 				lapespdata.BNO_gyro_y = msg.data.bno.gyry;
 				lapespdata.BNO_gyro_z = msg.data.bno.gyrz;
+*/
+				printf("ACC %.2f %.2f %.2f ", msg.data.bno.accelx, msg.data.bno.accely, msg.data.bno.accelz);
+				printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
 
-				pacote = encode_packet(
+				/*pacote = encode_packet(
 						TYPE_LAPESP_DTO,
 						(const uint8_t *)&lapespdata,
 						sizeof(LapespDTO)
 				);
-*/
-        		printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
-        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx,msg.data.bno.gyry, msg.data.bno.gyrz);
-        		printf("QUAT: %.4f %.4f %.4f %.4f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
-
-
+				HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2,
+										 pacote.out_buffer,
+										 pacote.out_len,
+										 HAL_MAX_DELAY);
+	*/
         	}
-
-        }
+        }// Tratar erro de transmissão aqui
     }
 }
+				/*printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
+        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx,msg.data.bno.gyry, msg.data.bno.gyrz);
+        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
+				*/
+
+
+
+
+
 /**
 * @brief Function implementing the Enviadados thread.
 * @param argument: Not used
