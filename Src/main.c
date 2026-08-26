@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lora.h"
+#include "debug_macro.h"
 #include "lapesp-types.h"
 #include "lapesp-protocol.h"
 #include "sensor-data.h"
@@ -30,7 +31,7 @@
 #include <stdio.h>
 #include "BNO080.h"
 #include "BME280_STM32.h"
-
+#include "flight_state.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -79,6 +80,9 @@ typedef struct {
 
 } SensorMessage;
 
+LapespDTO lapesp_dto;
+osMutexId_t lapesp_mutex;
+
 SensorMessage msg;
 
 
@@ -111,7 +115,7 @@ const osThreadAttr_t BME280_attributes = {
 osThreadId_t BNO08XHandle;
 const osThreadAttr_t BNO08X_attributes = {
   .name = "BNO08X",
-  .stack_size = 1024 * 4,
+  .stack_size = 720 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for GPS */
@@ -125,13 +129,19 @@ const osThreadAttr_t GPS_attributes = {
 osThreadId_t EnviadadosHandle;
 const osThreadAttr_t Enviadados_attributes = {
   .name = "Enviadados",
-  .stack_size = 512 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
-/* Definitions for SensoresQueue */
-osMessageQueueId_t SensoresQueueHandle;
-const osMessageQueueAttr_t SensoresQueue_attributes = {
-  .name = "SensoresQueue"
+/* Definitions for task */
+const osThreadAttr_t flightStateTask_attributes = {
+    .name = "flightStateTask",
+    .stack_size = 512 * 4,
+    .priority = osPriorityLow7,
+};
+/* Definitions for myQueue01 */
+osMessageQueueId_t myQueue01Handle;
+const osMessageQueueAttr_t myQueue01_attributes = {
+  .name = "myQueue01"
 };
 /* USER CODE BEGIN PV */
 /* USER CODE END PV */
@@ -201,17 +211,15 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
+  MX_GPIO_Init();
   MX_I2C1_Init();
+  MX_SPI2_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
 
   /* Init scheduler */
   osKernelInitialize();
-  BNO080_Initialization();
-  BNO080_enableRotationVector(40000);
-  //BNO080_enableAccelerometer(40000);
-  //BNO080_enableGyro(40000);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -226,8 +234,10 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* Create the queue(s) */
-  /* creation of SensoresQueue */
-  SensoresQueueHandle = osMessageQueueNew (10, sizeof(SensorMessage), &SensoresQueue_attributes);
+  /* creation of myQueue01 */
+  lapesp_mutex = osMutexNew(NULL);
+
+  myQueue01Handle = osMessageQueueNew (10, sizeof(SensorMessage), &myQueue01_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -246,19 +256,20 @@ int main(void)
   /* creation of Enviadados */
   EnviadadosHandle = osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  printf("ANTES CRIAR BNO\r\n");
+  osThreadNew(task_flight_state, NULL, &flightStateTask_attributes);
 
-   osThreadNew(StartBME, &bme280, &BME280_attributes);
-   osThreadNew(StartBNO08x, NULL, &BNO08X_attributes);
-   osThreadNew(StartDadosTask, NULL, &Enviadados_attributes);
+
+  /* creation of task */
+  /* USER CODE BEGIN RTOS_THREADS */
+  DEBUG_PRINT("ANTES CRIAR BNO\r\n");
+
    if (BNO08XHandle == NULL)
    {
-       printf("ERRO AO CRIAR BNO TASK\r\n");
+       DEBUG_PRINT("ERRO AO CRIAR BNO TASK\r\n");
    }
    else
    {
-       printf("BNO TASK CRIADA\r\n");
+       DEBUG_PRINT("BNO TASK CRIADA\r\n");
    }
   /* USER CODE END RTOS_THREADS */
 
@@ -401,7 +412,7 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 10;
@@ -468,10 +479,10 @@ static void MX_GPIO_Init(void)
   LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_13);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_0|LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12);
+  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12);
+  LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12);
 
   /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_13;
@@ -482,26 +493,26 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_1;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_0|LL_GPIO_PIN_1|LL_GPIO_PIN_12;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_8|LL_GPIO_PIN_11|LL_GPIO_PIN_12;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /**/
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_15;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -512,6 +523,14 @@ static void MX_GPIO_Init(void)
 
 
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartBME */
+/**
+  * @brief  Function implementing the BME280 thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartBME */
 
 /* USER CODE BEGIN Header_StartBME */
 /**
@@ -538,7 +557,7 @@ void StartBME(void *argument)
         msg.data.bme.umidade = bme280.Humidity;
 
         osStatus_t status = osMessageQueuePut(
-            SensoresQueueHandle,
+            myQueue01Handle,
             &msg,
             0,
             0
@@ -588,7 +607,7 @@ void StartBNO08x(void *argument)
             msg.data.bno.gyry = BNO080_getGyroY();
             msg.data.bno.gyrz = BNO080_getGyroZ();
             osStatus_t status = osMessageQueuePut(
-                SensoresQueueHandle,
+                myQueue01Handle,
                 &msg,
                 0,
                 0
@@ -602,6 +621,14 @@ void StartBNO08x(void *argument)
         osDelay(100);
     }
 }/* @param argument: Not used
+* @retval None
+*/
+
+
+/* USER CODE BEGIN Header_StartGPS */
+/**
+* @brief Function implementing the GPS thread.
+* @param argument: Not used
 * @retval None
 */
 /* USER CODE END Header_StartGPS */
@@ -619,67 +646,75 @@ void StartGPS(void *argument)
 /* USER CODE BEGIN Header_StartDadosTask */
 void StartDadosTask(void *argument)
 {
-	//LapespDTO lapespdata;
-	//LapespPacket pacote;
-	//memset(&lapespdata, 0, sizeof(LapespDTO));
+    LapespPacket pacote;
+    memset(&lapesp_dto, 0, sizeof(LapespDTO));
+
     for (;;)
     {
-        if ((osMessageQueueGet(SensoresQueueHandle, &msg, 0, osWaitForever)== osOK))
+
+        osStatus_t stats = osMessageQueueGet(
+            myQueue01Handle,
+            &msg,
+            0,
+            osWaitForever
+        );
+
+
+        if (stats == osOK)
         {
-        	if(msg.type == MSG_BME){
-        		/*lapespdata.BME_temperatura = msg.data.bme.temperatura;
-        		lapespdata.BME_pressao = msg.data.bme.pressao;
-        		lapespdata.BME_humidade = msg.data.bme.umidade;
-        		pacote = encode_packet(
-        				TYPE_LAPESP_DTO,
-			            (const uint8_t *)&lapespdata,
-			            sizeof(LapespDTO)
-        		);
-        		HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2,
-						 pacote.out_buffer,
-						 pacote.out_len,
-						 HAL_MAX_DELAY);
 
-        		*/printf("Temperatura: %.2f\r\n", msg.data.bme.temperatura);
-				printf("Pressao: %.2f\r\n", msg.data.bme.pressao);
-				printf("Altitude: %.2f\r\n", msg.data.bme.altitude);
-				printf("Umidade: %.2f\r\n", msg.data.bme.umidade);
-        	}
+            osStatus_t mutex_status =
+                osMutexAcquire(lapesp_mutex, osWaitForever);
 
-        	else if(msg.type == MSG_BNO){
-        		/*lapespdata.BNO_accel_x = msg.data.bno.accelx;
-        		lapespdata.BNO_accel_y = msg.data.bno.accely;
-        		lapespdata.BNO_accel_z = msg.data.bno.accelz;
 
-        		lapespdata.BNO_q0 = msg.data.bno.gyrq0;
-				lapespdata.BNO_q1 = msg.data.bno.gyrq1;
-				lapespdata.BNO_q2 = msg.data.bno.gyrq2;
-				lapespdata.BNO_q3 = msg.data.bno.gyrreal;
+            if (mutex_status == osOK)
+            {
+                if (msg.type == MSG_BME)
+                {
 
-				lapespdata.BNO_gyro_x = msg.data.bno.gyrx;
-				lapespdata.BNO_gyro_y = msg.data.bno.gyry;
-				lapespdata.BNO_gyro_z = msg.data.bno.gyrz;
-*/
-				printf("ACC %.2f %.2f %.2f ", msg.data.bno.accelx, msg.data.bno.accely, msg.data.bno.accelz);
-				printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
+                    lapesp_dto.BME_temperatura =
+                        msg.data.bme.temperatura;
 
-				/*pacote = encode_packet(
-						TYPE_LAPESP_DTO,
-						(const uint8_t *)&lapespdata,
-						sizeof(LapespDTO)
-				);
-				HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2,
-										 pacote.out_buffer,
-										 pacote.out_len,
-										 HAL_MAX_DELAY);
-	*/
-        	}
-        }// Tratar erro de transmissão aqui
+                    lapesp_dto.BME_pressao =
+                        msg.data.bme.pressao;
+
+                    lapesp_dto.BME_humidade =
+                        msg.data.bme.umidade;
+
+                    DEBUG_PRINT("TEMP: %.1f\r\n", lapesp_dto.BME_temperatura);
+                    DEBUG_PRINT("PRESSAO %.0f\r\n", lapesp_dto.BME_pressao);
+                    DEBUG_PRINT("UMIDADE %.0f \r\n", lapesp_dto.BME_humidade);
+
+                }
+
+                if (msg.type == MSG_BNO)
+                {
+
+                    DEBUG_PRINT("ACC: %.2f %.2f %.2f\r\n",
+                                msg.data.bno.accelx,
+                                msg.data.bno.accely,
+                                msg.data.bno.accelz);
+
+                    DEBUG_PRINT("GYR: %.1f %.1f %.1f\r\n",
+                                msg.data.bno.gyrx,
+                                msg.data.bno.gyry,
+                                msg.data.bno.gyrz);
+
+                    DEBUG_PRINT("QUAT: %.1f %.1f %.1f %.1f\r\n",
+                                msg.data.bno.gyrq0,
+                                msg.data.bno.gyrq1,
+                                msg.data.bno.gyrq2,
+                                msg.data.bno.gyrreal);
+
+                }
+
+                osMutexRelease(lapesp_mutex);
+            }
+        }
     }
-}
-				/*printf("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
-        		printf("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx,msg.data.bno.gyry, msg.data.bno.gyrz);
-        		printf("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
+}				/*DEBUG_PRINT("ACC: %.2f %.2f %.2f\r\n", msg.data.bno.accelx,msg.data.bno.accely , msg.data.bno.accelz);
+        		DEBUG_PRINT("GYR: %.2f %.2f %.2f\r\n", msg.data.bno.gyrx,msg.data.bno.gyry, msg.data.bno.gyrz);
+        		DEBUG_PRINT("QUAT: %.2f %.2f %.2f %.2f\r\n", msg.data.bno.gyrq0,msg.data.bno.gyrq1, msg.data.bno.gyrq2, msg.data.bno.gyrreal);
 				*/
 
 
@@ -693,6 +728,16 @@ void StartDadosTask(void *argument)
 *
 */
 /* USER CODE END Header_StartDadosTask */
+
+
+/* USER CODE BEGIN Header_task_flight_state */
+/**
+* @brief Function implementing the task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_task_flight_state */
+
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM1 interrupt took place, inside
@@ -741,7 +786,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: DEBUG_PRINT("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
